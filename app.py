@@ -1,6 +1,6 @@
 import os
 import datetime
-from typing import Literal, Optional, List
+from typing import Literal, Optional, List, Dict, Any
 
 import cv2
 import numpy as np
@@ -49,9 +49,7 @@ def download_image_from_supabase(bucket: str, path: str) -> bytes:
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Supabase download failed: {e}")
 
-
-def preprocess_face_from_bytes(img_bytes: bytes) -> np.ndarray:
-    
+def preprocess_face_from_bytes(img_bytes: bytes) -> tuple[np.ndarray, Dict[str, Any], Optional[float]]:
     """
     Decode image bytes, run MediaPipe face detection, return:
     - cropped, normalized face image (160x160 RGB float32)
@@ -65,6 +63,8 @@ def preprocess_face_from_bytes(img_bytes: bytes) -> np.ndarray:
     if img is None:
         raise ValueError("Could not decode image")
 
+    h, w, _ = img.shape
+
     # Run MediaPipe face detection
     with mp_face.FaceDetection(model_selection=0, min_detection_confidence=0.5) as face_detection:
         results = face_detection.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
@@ -74,30 +74,40 @@ def preprocess_face_from_bytes(img_bytes: bytes) -> np.ndarray:
 
         # Take the first detection
         det = results.detections[0]
-        bbox = det.location_data.relative_bounding_box
+        bbox_rel = det.location_data.relative_bounding_box
 
-        h, w, _ = img.shape
-        x_min = max(int(bbox.xmin * w), 0)
-        y_min = max(int(bbox.ymin * h), 0)
-        x_max = min(int((bbox.xmin + bbox.width) * w), w)
-        y_max = min(int((bbox.ymin + bbox.height) * h), h)
+        x_min = max(int(bbox_rel.xmin * w), 0)
+        y_min = max(int(bbox_rel.ymin * h), 0)
+        x_max = min(int((bbox_rel.xmin + bbox_rel.width) * w), w)
+        y_max = min(int((bbox_rel.ymin + bbox_rel.height) * h), h)
 
         if x_max <= x_min or y_max <= y_min:
             raise ValueError("Invalid face bounding box")
 
         face_img = img[y_min:y_max, x_min:x_max]
 
+        bbox = {
+            "x_min": x_min,
+            "y_min": y_min,
+            "x_max": x_max,
+            "y_max": y_max,
+            "width": x_max - x_min,
+            "height": y_max - y_min,
+        }
+
+        confidence = float(det.score[0]) if det.score else None
+
     # Resize to FaceNet input size (typically 160x160)
     face_img = cv2.resize(face_img, (160, 160))
     face_img = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
     face_img = face_img.astype("float32")
-    # Simple normalization (you can adjust to match your current code)
     face_img = (face_img - 127.5) / 128.0
+    
 
-    return face_img
+    return face_img, bbox, confidence
+
 
 def embed_face(face_img: np.ndarray) -> np.ndarray:
-    # face_img shape: (160, 160, 3)
     batch = np.expand_dims(face_img, axis=0)
     embedding = embedder.embeddings(batch)[0]
     return embedding.astype("float32")
@@ -112,23 +122,25 @@ def cosine_similarity(a, b) -> float:
     return float(np.dot(a, b) / denom)
 
 def enroll_embedding(
-    user_id: Optional[str],
-    bucket: str,
-    path: str,
+    memory_id: str,
     emb_list: List[float],
-    label: Optional[str],
+    face_index: int = 0,
+    bbox: Optional[Dict[str, Any]] = None,
+    confidence: Optional[float] = None,
 ):
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id required for enroll")
-
+    """
+    Insert a row into memory_faces for this memory.
+    For now we only handle a single face -> face_index = 0.
+    """
     try:
         res = supabase.table("memory_faces").insert(
             {
-                "user_id": user_id,
-                "bucket": bucket,
-                "path": path,
-                "embedding": emb_list,  # JSONB
-                "label": label,
+                "memory_id": memory_id,
+                "profile_id": None,   # you can fill this later when a face is labeled
+                "face_index": face_index,
+                "embedding": emb_list,   # works with vector(512) extension
+                "bbox": bbox,
+                "confidence": confidence,
             }
         ).execute()
     except Exception as e:
@@ -144,19 +156,16 @@ def enroll_embedding(
 
 
 def match_embedding(
-    user_id: Optional[str],
     emb_list: List[float],
 ):
-    # Decide scope: match within same user_id, or global?
-    query = supabase.table("memory_faces").select(
-        "id,user_id,label,embedding"
-    )
-    # Example: only compare within this user
-    if user_id:
-        query = query.eq("user_id", user_id)
-
+    """
+    Compare the probe embedding against all rows in memory_faces
+    and return the best match. (You can later scope by user/group.)
+    """
     try:
-        res = query.execute()
+        res = supabase.table("memory_faces").select(
+            "id,memory_id,profile_id,embedding"
+        ).execute()
         rows = res.data or []
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB read failed: {e}")
@@ -185,8 +194,8 @@ def match_embedding(
     else:
         match = {
             "id": best_row["id"],
-            "user_id": best_row["user_id"],
-            "label": best_row.get("label"),
+            "memory_id": best_row["memory_id"],
+            "profile_id": best_row.get("profile_id"),
             "similarity": best_sim,
         }
 
@@ -206,7 +215,7 @@ def process_image(payload: ProcessRequest):
 
     # 2. Detect + crop face, then embed
     try:
-        face_img = preprocess_face_from_bytes(img_bytes)
+        face_img, bbox, confidence = preprocess_face_from_bytes(img_bytes)
         embedding = embed_face(face_img)
         emb_list = embedding.tolist()
     except Exception as e:
@@ -215,15 +224,14 @@ def process_image(payload: ProcessRequest):
     # 3. Enroll or match
     if payload.mode == "enroll":
         return enroll_embedding(
-            user_id=payload.user_id,
-            bucket=payload.bucket,
-            path=payload.path,
+            memory_id=payload.memory_id,
             emb_list=emb_list,
-            label=payload.label,
+            face_index=0,
+            bbox=bbox,
+            confidence=confidence,
         )
     else:
         return match_embedding(
-            user_id=payload.user_id,
             emb_list=emb_list,
         )
 
