@@ -33,11 +33,12 @@ embedder = FaceNet()  # 512-D embeddings
 
 
 class ProcessRequest(BaseModel):
-    bucket: str
-    path: str
+    bucket: str                   # Supabase storage bucket
+    path: str                     # Supabase object path
+    memory_id: str                # UUID of the row in `memories`
     mode: Literal["enroll", "match"]
-    user_id: Optional[str] = None
-    label: Optional[str] = None
+    # Maybe use user_id here later if we want to scope matches by user
+    # user_id: Optional[str] = None
     
 # Assuming preprocessed image is in bytes and preprocess_face_from_bytes
 # and embed_face in current expo app
@@ -50,6 +51,14 @@ def download_image_from_supabase(bucket: str, path: str) -> bytes:
 
 
 def preprocess_face_from_bytes(img_bytes: bytes) -> np.ndarray:
+    
+    """
+    Decode image bytes, run MediaPipe face detection, return:
+    - cropped, normalized face image (160x160 RGB float32)
+    - bbox dict (pixel coords)
+    - confidence score
+    """
+    
     # Decode to OpenCV image
     file_array = np.frombuffer(img_bytes, np.uint8)
     img = cv2.imdecode(file_array, cv2.IMREAD_COLOR)
