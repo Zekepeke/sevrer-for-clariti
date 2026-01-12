@@ -7,7 +7,8 @@ SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-# Assuming preprocessed image is in bytes
+# Assuming preprocessed image is in bytes and preprocess_face_from_bytes
+# and embed_face in current expo app
 def download_image_from_supabase(bucket: str, path: str) -> bytes:
     # supabase-py returns raw bytes for download
     data = supabase.storage.from_(bucket).download(path)
