@@ -1,4 +1,13 @@
 import os
+import datetime
+from typing import Literal, Optional, List
+
+import cv2
+import numpy as np
+import mediapipe as mp
+from keras_facenet import FaceNet
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from supabase import create_client, Client
 
 # Load Supabase credentials from environment variables
