@@ -1,5 +1,6 @@
 # sevrer-for-clariti
 
+This is for a supabase backend
 
 # from server directory
 python3 -m venv .venv
