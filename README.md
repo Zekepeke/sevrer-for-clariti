@@ -4,10 +4,11 @@
 ## Getting Started
 This is for a supabase backend for another project
 
-### 1. Clone the repository
-```bash```
-git clone https://github.com/Zekepeke/sevrer-for-clariti.git
+```bash
+# Clone the repo
+git clone https://github.com/Zekepeke/sevrer-for-clariti.git 
 cd server-for-clariti
+```
 
 # from server directory
 python3 -m venv .venv
