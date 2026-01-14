@@ -31,7 +31,7 @@ pip install -r requirements.txt
 ```
 
 
-# running 
+# Running 
 ```bash
 uvicorn myapi:app --reload
 ```
