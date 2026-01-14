@@ -1,5 +1,7 @@
 # sevrer-for-clariti
 
+
+## Getting Started
 This is for a supabase backend for another project
 
 # from server directory
